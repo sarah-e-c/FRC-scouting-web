@@ -29,10 +29,13 @@ def upload_data_page():
     #key_verify = verify_key(request.headers['auth_key'])
     if request.method == 'POST':
         if True:
-            f = StringIO(str(request.data))
+            f = request.files['extra_data_file']
             logger.debug(f)
-            handle_data(pd.read_csv(f))
-            return 'uploaded successfully'
+            success = handle_data(pd.read_csv(f))
+            if success:
+                return 'Uploaded successfully'
+            else: 
+                return 'Upload failed'
         else:
             return 'please use a valid key.'
         

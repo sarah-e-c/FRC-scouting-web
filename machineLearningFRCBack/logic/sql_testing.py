@@ -1,9 +1,11 @@
+from asyncio import events
 import sqlite3
 from sqlite3 import Error
 import logging
 import pandas as pd
 import numpy as np
 import json
+import requests
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -13,6 +15,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.DEBUG)
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
+
 
 def create_connection(db_file):
     """ create a database connection to the SQLite database
@@ -92,11 +95,12 @@ def fill_matches_data_table(conn: sqlite3.Connection) -> None:
     Method to fill/update the uncleaned matches data table
     """
     df = pd.read_json('all_matches_uncleaned.json')
+    logger.debug(df.shape)
     events_data = pd.read_json('about_all_events.json')
     new_df = pd.DataFrame()
     bad_events = pd.read_csv('bad_events.csv')
     bad_events_list = np.unique(bad_events['BadEvents'])
-    df = df[df['event_key'].apply(lambda x: x not in bad_events_list)]
+    df = df.loc[df['event_key'].apply(lambda x: x not in bad_events_list)]
     none_list = []
     for _ in range(df.shape[0]):
         none_list.append(None)
@@ -141,95 +145,103 @@ def fill_matches_data_table(conn: sqlite3.Connection) -> None:
     new_df['event_key'] = none_list
     new_df['event_week'] = none_list
     new_df['winning_alliance'] = none_list
-
     logger.debug('data update initialized')
 
     new_df['match_key'] = df['key']
     for index, row in df.iterrows():
-        new_df['red_team_1'].iloc[index] = row['alliances']['red']['team_keys'][0]
-        new_df['red_team_2'].iloc[index] = row['alliances']['red']['team_keys'][1]
-        new_df['red_team_3'].iloc[index] = row['alliances']['red']['team_keys'][2]
-        new_df['red_hang_1'].iloc[index] = row['score_breakdown']['red']['endgameRobot1']
-        new_df['red_hang_2'].iloc[index] = row['score_breakdown']['red']['endgameRobot2']
-        new_df['red_hang_3'].iloc[index] = row['score_breakdown']['red']['endgameRobot3']
-        new_df['red_taxi_1'].iloc[index] = row['score_breakdown']['red']['taxiRobot1']
-        new_df['red_taxi_2'].iloc[index] = row['score_breakdown']['red']['taxiRobot2']
-        new_df['red_taxi_3'].iloc[index] = row['score_breakdown']['red']['taxiRobot3']
+        logger.debug(index)
+        new_df['red_team_1'].loc[index] = row['alliances']['red']['team_keys'][0]
+        new_df['red_team_2'].loc[index] = row['alliances']['red']['team_keys'][1]
+        new_df['red_team_3'].loc[index] = row['alliances']['red']['team_keys'][2]
+        new_df['red_hang_1'].loc[index] = row['score_breakdown']['red']['endgameRobot1']
+        new_df['red_hang_2'].loc[index] = row['score_breakdown']['red']['endgameRobot2']
+        new_df['red_hang_3'].loc[index] = row['score_breakdown']['red']['endgameRobot3']
+        new_df['red_taxi_1'].loc[index] = row['score_breakdown']['red']['taxiRobot1']
+        new_df['red_taxi_2'].loc[index] = row['score_breakdown']['red']['taxiRobot2']
+        new_df['red_taxi_3'].loc[index] = row['score_breakdown']['red']['taxiRobot3']
         try:
-            new_df['red_auto_cargo_lower'].iloc[index] = row['score_breakdown']['red']['autoCargoLowerBlue'] + row['score_breakdown']['red']['autoCargoLowerRed'] + row['score_breakdown']['red']['autoCargoLowerFar'] + row['score_breakdown']['red']['autoCargoLowerNear']
+            new_df['red_auto_cargo_lower'].loc[index] = row['score_breakdown']['red']['autoCargoLowerBlue'] + row['score_breakdown']['red']['autoCargoLowerRed'] + row['score_breakdown']['red']['autoCargoLowerFar'] + row['score_breakdown']['red']['autoCargoLowerNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['red_auto_cargo_lower'].iloc[index] = 0
+            new_df['red_auto_cargo_lower'].loc[index] = 0
         try:
-            new_df['red_auto_cargo_upper'].iloc[index] = row['score_breakdown']['red']['autoCargoUpperBlue'] + row['score_breakdown']['red']['autoCargoUpperRed'] + row['score_breakdown']['red']['autoCargoUpperFar'] + row['score_breakdown']['red']['autoCargoUpperNear']
+            new_df['red_auto_cargo_upper'].loc[index] = row['score_breakdown']['red']['autoCargoUpperBlue'] + row['score_breakdown']['red']['autoCargoUpperRed'] + row['score_breakdown']['red']['autoCargoUpperFar'] + row['score_breakdown']['red']['autoCargoUpperNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['red_auto_cargo_upper'].iloc[index] = 0
-        new_df['red_auto_cargo_points'].iloc[index] = row['score_breakdown']['red']['autoCargoPoints']
+            new_df['red_auto_cargo_upper'].loc[index] = 0
+        new_df['red_auto_cargo_points'].loc[index] = row['score_breakdown']['red']['autoCargoPoints']
         try:
-            new_df['red_teleop_cargo_lower'].iloc[index] = row['score_breakdown']['red']['teleopCargoLowerFar'] + row['score_breakdown']['red']['teleopCargoLowerBlue'] + row['score_breakdown']['red']['teleopCargoLowerRed'] + row['score_breakdown']['red']['teleopCargoLowerNear']
+            new_df['red_teleop_cargo_lower'].loc[index] = row['score_breakdown']['red']['teleopCargoLowerFar'] + row['score_breakdown']['red']['teleopCargoLowerBlue'] + row['score_breakdown']['red']['teleopCargoLowerRed'] + row['score_breakdown']['red']['teleopCargoLowerNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['red_teleop_cargo_lower'].iloc[index] = 0
+            new_df['red_teleop_cargo_lower'].loc[index] = 0
         try:
-            new_df['red_teleop_cargo_upper'].iloc[index] = row['score_breakdown']['red']['teleopCargoUpperFar'] + row['score_breakdown']['red']['teleopCargoUpperBlue'] + row['score_breakdown']['red']['teleopCargoUpperRed'] + row['score_breakdown']['red']['teleopCargoUpperNear']
+            new_df['red_teleop_cargo_upper'].loc[index] = row['score_breakdown']['red']['teleopCargoUpperFar'] + row['score_breakdown']['red']['teleopCargoUpperBlue'] + row['score_breakdown']['red']['teleopCargoUpperRed'] + row['score_breakdown']['red']['teleopCargoUpperNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['red_teleop_cargo_upper'].iloc[index] = 0
-        new_df['red_teleop_cargo_points'].iloc[index] = row['score_breakdown']['red']['teleopPoints']
+            new_df['red_teleop_cargo_upper'].loc[index] = 0
+        new_df['red_teleop_cargo_points'].loc[index] = row['score_breakdown']['red']['teleopPoints']
         try:
-            new_df['red_foul_count'].iloc[index] = row['score_breakdown']['red']['foulCount']
-            new_df['red_foul_points'].iloc[index] = row['score_breakdown']['red']['foulPoints']
+            new_df['red_foul_count'].loc[index] = row['score_breakdown']['red']['foulCount']
+            new_df['red_foul_points'].loc[index] = row['score_breakdown']['red']['foulPoints']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['red_foul_count'].iloc[index] = 0
-            new_df['red_foul_points'].iloc[index] = 0
-        new_df['red_total_score'].iloc[index] = row['score_breakdown']['red']['totalPoints']
-        new_df['blue_team_1'].iloc[index] = row['alliances']['blue']['team_keys'][0]
-        new_df['blue_team_2'].iloc[index] = row['alliances']['blue']['team_keys'][1]
-        new_df['blue_team_3'].iloc[index] = row['alliances']['blue']['team_keys'][2]
-        new_df['blue_hang_1'].iloc[index] = row['score_breakdown']['blue']['endgameRobot1']
-        new_df['blue_hang_2'].iloc[index] = row['score_breakdown']['blue']['endgameRobot2']
-        new_df['blue_hang_3'].iloc[index] = row['score_breakdown']['blue']['endgameRobot3']
-        new_df['blue_taxi_1'].iloc[index] = row['score_breakdown']['blue']['taxiRobot1']
-        new_df['blue_taxi_2'].iloc[index] = row['score_breakdown']['blue']['taxiRobot2']
-        new_df['blue_taxi_3'].iloc[index] = row['score_breakdown']['blue']['taxiRobot3']
+            new_df['red_foul_count'].loc[index] = 0
+            new_df['red_foul_points'].loc[index] = 0
+        new_df['red_total_score'].loc[index] = row['score_breakdown']['red']['totalPoints']
+        new_df['blue_team_1'].loc[index] = row['alliances']['blue']['team_keys'][0]
+        new_df['blue_team_2'].loc[index] = row['alliances']['blue']['team_keys'][1]
+        new_df['blue_team_3'].loc[index] = row['alliances']['blue']['team_keys'][2]
+        new_df['blue_hang_1'].loc[index] = row['score_breakdown']['blue']['endgameRobot1']
+        new_df['blue_hang_2'].loc[index] = row['score_breakdown']['blue']['endgameRobot2']
+        new_df['blue_hang_3'].loc[index] = row['score_breakdown']['blue']['endgameRobot3']
+        new_df['blue_taxi_1'].loc[index] = row['score_breakdown']['blue']['taxiRobot1']
+        new_df['blue_taxi_2'].loc[index] = row['score_breakdown']['blue']['taxiRobot2']
+        new_df['blue_taxi_3'].loc[index] = row['score_breakdown']['blue']['taxiRobot3']
         try:
-            new_df['blue_auto_cargo_lower'].iloc[index] = row['score_breakdown']['blue']['autoCargoLowerBlue'] + row['score_breakdown']['blue']['autoCargoLowerRed'] + row['score_breakdown']['blue']['autoCargoLowerFar'] + row['score_breakdown']['blue']['autoCargoLowerNear']
+            new_df['blue_auto_cargo_lower'].loc[index] = row['score_breakdown']['blue']['autoCargoLowerBlue'] + row['score_breakdown']['blue']['autoCargoLowerRed'] + row['score_breakdown']['blue']['autoCargoLowerFar'] + row['score_breakdown']['blue']['autoCargoLowerNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['blue_auto_cargo_lower'].iloc[index] = 0
+            new_df['blue_auto_cargo_lower'].loc[index] = 0
         try:
-            new_df['blue_auto_cargo_upper'].iloc[index] = row['score_breakdown']['blue']['autoCargoUpperBlue'] + row['score_breakdown']['blue']['autoCargoUpperRed'] + row['score_breakdown']['blue']['autoCargoUpperFar'] + row['score_breakdown']['blue']['autoCargoUpperNear']
+            new_df['blue_auto_cargo_upper'].loc[index] = row['score_breakdown']['blue']['autoCargoUpperBlue'] + row['score_breakdown']['blue']['autoCargoUpperRed'] + row['score_breakdown']['blue']['autoCargoUpperFar'] + row['score_breakdown']['blue']['autoCargoUpperNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['blue_auto_cargo_upper'].iloc[index] = 0
-        new_df['blue_auto_cargo_points'].iloc[index] = row['score_breakdown']['blue']['autoCargoPoints']
+            new_df['blue_auto_cargo_upper'].loc[index] = 0
+        new_df['blue_auto_cargo_points'].loc[index] = row['score_breakdown']['blue']['autoCargoPoints']
 
         try:
-            new_df['blue_teleop_cargo_lower'].iloc[index] = row['score_breakdown']['blue']['teleopCargoLowerFar'] + row['score_breakdown']['blue']['teleopCargoLowerBlue'] + row['score_breakdown']['blue']['teleopCargoLowerRed'] + row['score_breakdown']['blue']['teleopCargoLowerNear']
+            new_df['blue_teleop_cargo_lower'].loc[index] = row['score_breakdown']['blue']['teleopCargoLowerFar'] + row['score_breakdown']['blue']['teleopCargoLowerBlue'] + row['score_breakdown']['blue']['teleopCargoLowerRed'] + row['score_breakdown']['blue']['teleopCargoLowerNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['blue_teleop_cargo_lower'].iloc[index] = 0
+            new_df['blue_teleop_cargo_lower'].loc[index] = 0
         try:
-            new_df['blue_teleop_cargo_upper'].iloc[index] = row['score_breakdown']['blue']['teleopCargoUpperFar'] + row['score_breakdown']['blue']['teleopCargoUpperBlue'] + row['score_breakdown']['blue']['teleopCargoUpperRed'] + row['score_breakdown']['blue']['teleopCargoUpperNear']
+            new_df['blue_teleop_cargo_upper'].loc[index] = row['score_breakdown']['blue']['teleopCargoUpperFar'] + row['score_breakdown']['blue']['teleopCargoUpperBlue'] + row['score_breakdown']['blue']['teleopCargoUpperRed'] + row['score_breakdown']['blue']['teleopCargoUpperNear']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['blue_teleop_cargo_upper'].iloc[index] = 0
-        new_df['blue_teleop_cargo_points'].iloc[index] = row['score_breakdown']['blue']['teleopPoints']
+            new_df['blue_teleop_cargo_upper'].loc[index] = 0
+        new_df['blue_teleop_cargo_points'].loc[index] = row['score_breakdown']['blue']['teleopPoints']
         try:
-            new_df['blue_foul_count'].iloc[index] = row['score_breakdown']['blue']['foulCount']
-            new_df['blue_foul_points'].iloc[index] = row['score_breakdown']['blue']['foulPoints']
+            new_df['blue_foul_count'].loc[index] = row['score_breakdown']['blue']['foulCount']
+            new_df['blue_foul_points'].loc[index] = row['score_breakdown']['blue']['foulPoints']
         except Exception as e:
             logger.warning(f'Error in row {row}: {e}')
-            new_df['blue_foul_count'].iloc[index] = 0
-            new_df['blue_foul_points'].iloc[index] = 0
-        new_df['blue_total_score'].iloc[index] = row['score_breakdown']['blue']['totalPoints']
+            new_df['blue_foul_count'].loc[index] = 0
+            new_df['blue_foul_points'].loc[index] = 0
+        new_df['blue_total_score'].loc[index] = row['score_breakdown']['blue']['totalPoints']
 
     logging.debug('Finished loading into a dataframe')
+    
     new_df['event_key'] = df['event_key']
+    logger.debug(new_df)
+    logger.debug(events_data)
     def get_week(event_key):
-        week = events_data.loc[events_data['key'] == event_key].iloc[0]['week']
+        try:
+            week = events_data.loc[events_data['key'] == event_key]
+            week = week['week'].iloc[0]
+        except Exception as e:
+            logger.warning(f'Error at {event_key} -- {e}')
+            week = 9 # out of range
         if week in range(6):
             return week
         else:
@@ -294,6 +306,7 @@ def create_about_all_events_table(conn: sqlite3.Connection):
         year integer
     )
     """
+    requests.get()
     cursor = conn.cursor()
     cursor.execute(query)
     cursor.close()
@@ -326,7 +339,7 @@ def fill_about_all_events_table(conn: sqlite3.Connection, path='about_all_events
 
     
 if __name__ == '__main__':
-    database = r"sql_data.db"
+    database = r"data.db"
     connection = create_connection(database)
     create_matches_data_table(connection)
     fill_matches_data_table(connection)

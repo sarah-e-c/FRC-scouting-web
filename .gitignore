@@ -2,3 +2,6 @@
 env
 __pycache__
 machineLearningFRCBack/__pycache__
+logs.txt
+backup_to_sql_file.csv
+bad_events.csv

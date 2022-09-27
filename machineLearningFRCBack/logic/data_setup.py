@@ -11,22 +11,26 @@ import logging
 import sqlite3
 from sqlite3 import Error
 from machineLearningFRCBack.logic.utils import Constants
+from machineLearningFRCBack import models
+import json
+import datetime
 
 #must send key with header (please dont steal my key  :()
 HEADER = {'X-TBA-Auth-Key': Constants.KEY}
 YEAR = 2022
 
 logger = logging.getLogger(__name__)
-
+logging.basicConfig(level=logging.DEBUG)
 
 # first method
-def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, event_keys='default', match_data_filepath='all_matches_uncleaned.json'):
+def get_api_data(engine, data_loaded=False, verbose=True, event_keys='default', match_data_filepath='all_matches_uncleaned.json', revision=0):
     """
     Method to grab all of the data needed for the program from the Blue Alliance api.
     data_loaded -- signify if data is loaded already. (mostly for testing, usually you wouldn't have to run this method at all)
     verbose -- signify if print statements/logs are wanted
     event_keys -- pass 'default' for default list of events, pass 'all' for all good events for year, or pass in custom list of event keys
     match_data_filepath -- filepath where the wanted matches will be saved in a json
+    revision=0 -- revision number
     """
     if verbose:
         logger.debug('getting data from api...')
@@ -50,6 +54,10 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
             team_alliance = df.iloc[i]['team_alliance']
             try:
                 data_list = df.iloc[i]['score_breakdown'][team_alliance]
+            except Exception as e:
+                data_list = {'totalPoints': 0}
+                logger.warning(e)
+            try:
                 # which robot were they ?
                 if df.iloc[i]['teammate_1'] == team_name:
                     taxied_list.append(data_list['taxiRobot1'])
@@ -109,7 +117,7 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
             else:
                 won_game_list.append('No')
             
-        # week
+        # week -- could be better
         week_list = [-1] * len(taxied_list)
         for i in range(5):
             current_week_indexes = selector.select_by_event_week([i], df)
@@ -131,6 +139,9 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
 
 
     def get_team(df, team_name):
+        """
+        Method that returns a series with all of the team alliances
+        """
         team_list = []
         for i in range(df.shape[0]):
             #team_split_string = df.iloc[i]['alliances'].split('red')
@@ -140,7 +151,8 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
                 elif team_name in df.iloc[i]['alliances']['red']['team_keys']:
                     team_list.append('red')
                 
-            except:
+            except Exception as e:
+                logger.warning(e)
                 team_list.append('red')
         return pd.Series(team_list, name='team_alliance')
 
@@ -237,7 +249,6 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
             new_data = new_data.join(get_opponents(new_data))
             new_data = new_data.join(get_score_data(new_data, team_name))
             new_data.drop(['actual_time', 'alliances', 'post_result_time', 'predicted_time', 'score_breakdown', 'videos', 'time'], axis=1, inplace=True)
-            new_data.sort_values(by='match_number', inplace=True)
             new_data.reset_index(inplace=True)
             new_data.drop('index', axis=1, inplace=True)
 
@@ -250,22 +261,25 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
 
 
         all_teams_matches = pd.concat(all_teams_matches)
-        all_teams_matches['hang'] = all_teams_matches['hang'].map({None: 0, 'No': 0, 'Yes': 1})
+        all_teams_matches['hang'] = all_teams_matches['hang'].map({None: 0, 'None':0, 'Mid': 3, 'Traversal': 7, 'High': 5, 'Low': 1, 'Yes': 1})
         all_teams_matches['taxied'] = all_teams_matches['taxied'].map({None: 0, 'No': 0, 'Yes': 1})
         all_teams_matches['won_game'] = all_teams_matches['won_game'].map({None: 0, 'No': 0, 'Yes': 1})
         all_teams_matches.drop(['level_0'], axis=1, inplace=True)
         all_teams_matches.reset_index(inplace=True)
-        all_teams_matches.rename({'level_0': 'team_name'}, inplace=True)
+        all_teams_matches.rename({'level_0': 'team_name'}, axis='columns', inplace=True)
+        all_teams_matches.drop(['level_1'], axis=1, inplace=True)
         logger.debug(all_teams_matches.columns)
         all_teams_matches.drop(['team_keys'], axis=1, inplace=True)
+        revisions_series = pd.Series([revision] * all_teams_matches.shape[0], name='revision')
+        all_teams_matches = all_teams_matches.join(revisions_series)
+        all_teams_matches.rename_axis('index')
         all_teams_matches.to_csv('backup_to_sql_file.csv')
-
         # none_list = None * all_teams_matches.shape[0]
         # all_teams_matches['team_auto_cargo_lower'] = none_list
         # all_teams_matches['team_auto_cargo_upper'] = none_list
         # all_teams_matches['team_teleop_cargo_lower'] = none_list
         # all_teams_matches['team_teleop_cargo_upper'] = none_list
-        all_teams_matches.to_sql('match_expanded_tba', conn, if_exists='replace')
+        all_teams_matches.to_sql('match_expanded_tba', engine, if_exists='replace')
         logger.debug('written to sql')
 
 
@@ -307,277 +321,108 @@ def get_api_data(conn: sqlite3.Connection, data_loaded=False, verbose=True, even
             pass
 
 
-#second method for normal flow
-# def team_stats_process(directory='teams_data', verbose=True, team_stats_filepath='all_team_stats.csv', late_weighting=False, included_weeks ='all'):
-#     """
-#     method that takes all of the teams data and compresses it into one file.
-#     directory='teams_data' -- folder that the team stats are in
-#     verbose=True -- True to print to console False to not
-#     team_stats_filepath='all_team_stats.csv' -- filepath for csv with team statistics. Pass False to return a pandas DataFrame
-#     late_weighting=False -- experimental feature where later matches are weighted more. 
-#         Enter False or number above 1. WARNING -- decimal values take longer to compute
-#     included_weeks='all' -- provide a list of weeks for the statistics to be computed. Enter -1 events that aren't in the week system.
-#     """
-
-#     if verbose:
-#         logger.debug('Condensing team averages...')
-    
-#     team_paths = []
-
-#     for filename in os.scandir(directory):
-#         if filename.is_file():
-#             team_paths.append(filename.path)
-
-#     winrate_list = []
-#     hang_score_list = []
-#     team_auto_lower_list = []
-#     team_auto_upper_list = []
-#     team_tele_lower_list = []
-#     team_tele_upper_list = []
-#     total_team_points_list = []
-#     highest_comp_level_list = []
-#     team_name_list = []
-
-#     def get_winrate_highest_level(df, late_weighting):
-#         try:
-#             if included_weeks != 'all':
-#                 df = df.loc[df['Week'].apply(lambda x: x in included_weeks)]
-#             if not late_weighting:
-#                 mapping = {'Yes': 1, 'Tie': 0.5, 'No': 0}
-#                 winrate_list.append(df['WonGame'].map(mapping).mean())
-#                 mapping_2 = {'None': 0, 'Low': 4, 'Mid': 8, 'High': 12, 'Traversal': 15}
-#                 hang_score_list.append(df['Hang'].map(mapping_2).mean())
-#                 team_auto_lower_list.append(df['TeamAutoLower'].mean())
-#                 team_auto_upper_list.append(df['TeamAutoUpper'].mean())
-#                 team_tele_lower_list.append(df['TeamTeleopLower'].mean())
-#                 team_tele_upper_list.append(df['TeamTeleopUpper'].mean())
-#                 mapping_3 = {'f': 5, 'sf': 3, 'qm': 0}
-#                 highest_comp_level_list.append(df['comp_level'].map(mapping_3).max())
-#             else:
-#                 mapping_win = {'Yes': 1, 'Tie': 0.5, 'No': 0}
-#                 mapping_climb = {'None': 0, 'Low': 4, 'Mid': 8, 'High': 12, 'Traversal': 15}
-#                 mapping_match_level = {'f': 5, 'sf': 3, 'qm': 0}
-
-#                 # getting orders of the weeks that they are in
-#                 all_weeks = np.unique(df['Week'])
-#                 all_weeks = list(np.sort(all_weeks))
-
-#                 # empty is actually the last one
-#                 if all_weeks[0] is None:
-#                     all_weeks.remove(0)
-#                     all_weeks.append(-1)
-#                 mapping = {}
-#                 for index, week in enumerate(all_weeks):
-#                     mapping[week] = late_weighting ** index
-#                 df['week_weighting'] = df['Week'].map(mapping)
-
-#                 winrate_list.append(np.average(df['WonGame'].map(mapping_win), weights=df['week_weighting']))
-#                 hang_score_list.append(df['Hang'].map(mapping_climb).mean())
-
-
-#                 team_auto_lower_list.append(np.average(df['TeamAutoLower'], weights=df['week_weighting']))
-#                 team_auto_upper_list.append(np.average(df['TeamAutoUpper'], weights=df['week_weighting']))
-#                 team_tele_lower_list.append(np.average(df['TeamTeleopLower'], weights=df['week_weighting']))
-#                 team_tele_upper_list.append(np.average(df['TeamTeleopUpper'], weights=df['week_weighting']))
-#                 highest_comp_level_list.append(df['comp_level'].map(mapping_match_level).max())
-#         except Exception as e:
-            
-#             winrate_list.append(0)
-#             hang_score_list.append(0)
-#             team_auto_lower_list.append(0)
-#             team_auto_upper_list.append(0)
-#             team_tele_lower_list.append(0)
-#             team_tele_upper_list.append(0)
-#             highest_comp_level_list.append(0)
-
-
-#     for path in team_paths:
-#         df = pd.read_csv(path)
-#         team_name_list.append(path.split('/')[1].split('data')[0]) # kind of sus but w/e
-#         get_winrate_highest_level(df, late_weighting)
-
-#     # loading final DataFrame
-#     total_scores_df = pd.DataFrame({ 'TeamName': team_name_list,
-#                         'WinRate': winrate_list,
-#                         'TeamAutoLower': team_auto_lower_list,
-#                         'TeamAutoUpper': team_auto_upper_list,
-#                         'TeamTeleopLower': team_tele_lower_list,
-#                         'TeamTeleopUpper': team_tele_upper_list,
-#                         'HangScore': hang_score_list,
-#                         'HighestCompLevel': highest_comp_level_list
-#                         })
-    
-#     if not team_stats_filepath:
-#         return total_scores_df
-#     total_scores_df.to_csv(team_stats_filepath, index=False)
-#     logger.info('Fresh team statistics written to csv')
-
-# #third method for normal flow
-# def load_matches_alliance_stats(event_keys='default', verbose=True, team_stats_filepath='all_team_stats.csv', all_matches_filepath='all_matches_uncleaned.json', all_matches_stats_filepath='all_matches_stats.csv'):
-#     """
-#     method that matches all of the teams data to the selected event matches and puts them in a file.
-#     event_keys='default' -- 'default', 'all', or selected list of event keys. Default gives Chesapeake district events,
-#     'all' gives all found events, and a list of event keys will process those event keys.
-#     verbose=True -- True to print to the console, False to not
-#     team_stats_filepath='all_team_stats.csv' -- filepath where team statistics are loaded (from team_stats_process) -- or pass pandas df
-#     all_matches_filepath -- filepath where all of the wanted matches are loaded in -- or pass pandas df
-#     all_matches_stats_filepath -- filepath where all of the matches' statistics are loaded in. -- or return pandas df
-#     """
-
-#     if verbose:
-#         logger.debug('Loading alliance statistics...')
-
-#     def team_lookup_averages(team_list, team_stats_df):
-#         """
-#         Method to grab all of the team statistics of a given alliance and return the wanted meta stats
-#         team_list -- regular list of teams in an alliance
-#         team_stats_df -- pandas DataFrame with all teams' statistics
-#         """
-#         team_winrate_list = []
-#         team_auto_lower_list = []
-#         team_auto_upper_list = []
-#         team_teleop_lower_list = []
-#         team_teleop_upper_list = []
-#         team_hang_score_list = []
-#         team_highest_comp_level_list = []
-        
-#         #iterating through teams and grabbing wanted stats
-#         for team in team_list:
-#             team_winrate_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['WinRate']))
-#             team_auto_lower_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['TeamAutoLower']))
-#             team_auto_upper_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['TeamAutoUpper']))
-#             team_teleop_lower_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['TeamTeleopLower']))
-#             team_teleop_upper_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['TeamTeleopUpper']))
-#             team_hang_score_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['HangScore']))
-#             team_highest_comp_level_list.append(float(team_stats_df.loc[team_stats_df['TeamName'] == team]['HighestCompLevel']))
-        
-#         # returning the wanted meta statistics in a series (for a dataframe)
-#         return pd.Series({'AvgWinrate': statistics.mean(team_winrate_list),
-#                             'HighestAvgWinrate': max(team_winrate_list),
-#                             'LowestAvgWinrate': min(team_winrate_list),
-
-#                             'AvgAutoLower': statistics.mean(team_auto_lower_list),
-#                             'HighestAutoLower': max(team_auto_lower_list),
-
-#                             'AvgAutoUpper': statistics.mean(team_auto_upper_list),
-#                             'HighestAutoUpper': max(team_auto_upper_list),
-
-#                             'AvgTeleopLower': statistics.mean(team_teleop_lower_list),
-#                             'HighestTelopLower': max(team_teleop_lower_list),
-
-#                             'AvgTelopUpper': statistics.mean(team_teleop_upper_list),
-#                             'HighestTelopUpper': max(team_teleop_upper_list),
-#                             'LowestTelopUpper': min(team_teleop_upper_list),
-
-
-#                             'AvgHangScore': statistics.mean(team_hang_score_list),
-
-#                             'AvgHighestCompLevel': statistics.mean(team_highest_comp_level_list),
-
-
-#                             })
-
-#     def get_teams(match_df):
-#         """
-#         method that takes in an uncleaned read json file for a single match
-#         and returns a DataFrame with the team keys sorted into red and blue. (for clean_data method)
-#         match_df -- pandas DataFrame with wanted uncleaned match data from the api.
-#         """
-#         red_teams_list = []
-#         blue_teams_list = []
-#         for i in range(match_df.shape[0]):
-#             red_teams_list.append(match_df.iloc[i]['alliances']['red']['team_keys'])
-#             blue_teams_list.append(match_df.iloc[i]['alliances']['blue']['team_keys'])
-#         return pd.DataFrame({'Red': red_teams_list, 'Blue': blue_teams_list})
-
-
-#     def get_team_stats(match_df, team_stats_df):
-#         """
-#         method that gets team averages 
-#         match_df -- pandas DataFrame with wanted uncleaned match data from the api.
-#         team_stats_df -- dataframe with all of the team averages loaded in (from team_stats_process)
-#         """
-#         def get_team_averages(team_list_df, team_stats_df):
-#             """
-#             Method that takes a list of teams and team info and returns a series with all of the team stats.
-#             team_list_df -- dataframe with teams sorted into red and blue.
-#             team_stats_df -- dataframe with all of the team averages loaded in
-#             """
-#             series_list = []
-#             for i in range(team_list_df.shape[0]):
-#                 team_info_red = team_lookup_averages(team_list_df.iloc[i]['Red'], team_stats_df).rename('Red Averages')
-#                 team_info_blue = team_lookup_averages(team_list_df.iloc[i]['Blue'], team_stats_df).rename('Blue Averages')
-#                 series_list.append(team_info_red - team_info_blue)
-            
-#             return pd.DataFrame(series_list)
-
-#         teams_names_df = get_teams(match_df)
-#         winner_series = match_df['winning_alliance'].map({'red': 1, '': 0, 'blue': -1})
-
-#         return get_team_averages(teams_names_df, team_stats_df).join(match_df['event_key']).join(winner_series)
-
-#     if type(team_stats_filepath) == str:
-#         team_stats_dataframe = pd.read_csv(team_stats_filepath)
-#     else:
-#         team_stats_dataframe = team_stats_filepath
-
-#     if type(event_keys) == str:
-#         if event_keys == 'default':
-#             #chesapeake area event keys -- default
-#             event_keys = [
-#             "2022va305",
-#             '2022va306',
-#             '2022va319',
-#             "2022va320",
-#             '2022dc305',
-#             '2022dc306',
-#             '2022dc312',
-#             '2022dc313',
-#             '2022dc326'
-#             ]
-#         elif event_keys == 'all':
-#             if type(all_matches_filepath) == str:
-#                 temp_df = pd.read_json(all_matches_filepath)
-#             else:
-#                 temp_df = all_matches_filepath
-#             matches_data = temp_df
-#     else:
-#         if type(all_matches_filepath) == str:
-#             temp_df = pd.read_json(all_matches_filepath)
-#         else:
-#             temp_df = all_matches_filepath
-#             matches_data = temp_df
-#         # for event in event_keys:
-#         #     # source = requests.get(f'https://www.thebluealliance.com/api/v3/event/{event}/matches', HEADER).text #should be rewritten
-#         #     # matches_data_list.append(pd.read_json(source))
-#         #     # time.sleep(0.3)
-#         #     # print(event, ' is loaded!')
-        
-#             temp_df = temp_df.loc[temp_df['event_key'].apply(lambda x: x in event_keys)]
-    
-#     matches_data = temp_df
-#     all_matches_data = []
-#     all_matches_data.append(get_team_stats(matches_data, team_stats_dataframe))
-    
-#     # all_matches_data is a list of dataframes
-#     try:
-#         all_matches_df = pd.concat(all_matches_data)
-#     except:
-#         all_matches_df = None
-#     if type(all_matches_stats_filepath) == str:
-#         all_matches_df.to_csv(all_matches_stats_filepath)
-#     else:
-#         return all_matches_df
+def fill_event_table(session):
+    def date_parser(json_dict):
+        FORMAT = '%Y-%m-%d'
+        for key, value in json_dict.items():
+            try: 
+                json_dict[key] = datetime.datetime.strptime(value, FORMAT)
+            except:
+                pass
+        return json_dict
+    response = requests.get(f'https://www.thebluealliance.com/api/v3/events/{YEAR}', HEADER)
+    if response.status_code != 304:
+        models.Event.query.delete()
+        all_events_df = pd.read_json(response.text)
+        logger.debug(all_events_df)
+        to_add = []
+        for _, item in all_events_df.iterrows():
+            if item['district'] is not None:
+                district_ = str(item['district']['key'])
+            else: 
+                district_ = 'notadistrict'
+                week = item['week']
+                if week not in map(float,range(5)):
+                    week = -1
+                else:
+                    week = int(week)
+            new_entry = models.Event(
+                key=item['key'],
+                week = week,
+                year = item['year'],
+                district = district_,
+                start_date = item['start_date'],
+                end_date = item['end_date']
+            )
+            to_add.append(new_entry)
+        session.add_all(to_add)
+        session.commit()
+        logger.debug('event table filled')
+    else:
+        return False
 
 def upload_data_to_database():
     # get df of uploaded data
-
-    # for each
     pass
 
+def get_match_dictionary_data(session, mode='all', revision=0, years=[YEAR]): # could be combined with getting the expanded data for fast testing
+    """
+    Method to get the data needed for the match dictionary.
+    session: sqlalchemy session
+    mode='all': where which events should be pulled from. default is all, also accepts 'chesapeake'
+    """
+
+    for year in years:
+        events_to_get = []
+        chesapeake_events = [
+            "2022va305",
+            '2022va306',
+            '2022va319',
+            "2022va320",
+            '2022dc305',
+            '2022dc306',
+            '2022dc312',
+            '2022dc313',
+            '2022dc326'
+            ]
+        if mode == 'all':
+            response = requests.get(f'https://www.thebluealliance.com/api/v3/events/{year}/keys', HEADER)
+            events_to_get = list(pd.read_json(response.text)[0])
+        elif mode == 'chesapeake':
+            events_to_get = chesapeake_events
+        else:
+            raise Exception()
+        
+
+
+        matches_data_list = []
+        for event in events_to_get:
+            matches = json.loads(requests.get(f'https://www.thebluealliance.com/api/v3/event/{event}/matches/simple', HEADER).text)
+            for match in matches:
+                matches_data_list.append(models.MatchDictionary(
+                        key = match['key'],
+                        red_team_1 = match['alliances']['red']['team_keys'][0],
+                        red_team_2 = match['alliances']['red']['team_keys'][1],
+                        red_team_3 = match['alliances']['red']['team_keys'][2],
+                        blue_team_1 = match['alliances']['blue']['team_keys'][0],
+                        blue_team_2 = match['alliances']['blue']['team_keys'][1],
+                        blue_team_3 = match['alliances']['blue']['team_keys'][2],
+                        event_key = match['event_key'],
+                        revision=revision,
+                        occurred = int(not match['actual_time'] == np.nan),
+                        year = int(match['key'][0:4]),
+                        match_number = match['match_number'],
+                        comp_level = match['comp_level'],
+                        winning_alliance = match['winning_alliance']
+                ))
+        session.add_all(matches_data_list)
+        session.commit()
+        logger.debug('year ', year, ' completed.' )
+    logger.debug('all matches written')
 if __name__ == '__main__':
     
     get_api_data(data_loaded=False, event_keys='all')
+
     #team_stats_process(late_weighting=1.5)
     #print(load_matches_alliance_stats(event_keys='all', all_matches_stats_filepath=False))
 

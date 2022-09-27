@@ -10,8 +10,8 @@ def handle_data(data: pd.DataFrame):
     logger.debug('Recieved upload request')
 
     def find_index(row):
-        logger.debug(models.MatchExpandedTBA.query.filter_by(team_name=row['team_name']).first().won_game)
-        index = models.MatchExpandedTBA.query.filter_by(team_name=row['team_name']).first().index
+        logger.debug(models.MatchExpandedTBA.query.filter_by(team_name=row['team_name']).one().won_game)
+        index = models.MatchExpandedTBA.query.filter_by(team_name=row['team_name']).one().index
         return index
     try:
         for _, row in data.iterrows():
